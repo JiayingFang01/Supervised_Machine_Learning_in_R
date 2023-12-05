@@ -1,0 +1,321 @@
+---
+title: "Use logit regression models to predict Titanic passenger survival"
+author: "Fiona, Fang Jiaying"
+date: '2022-11-9'
+output: github_document
+---
+
+# Preparation  
+
+## Packages  
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rstudioapi::getActiveDocumentContext
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+```
+
+```{r}
+pacman::p_load(tidyverse, haven, stargazer, tidymodels, ranger, modelsummary, dplyr, modeldata, pscl, pROC)
+```
+
+
+## Data  
+
+We load the Titanic data.  
+
+```{r}
+td <- read.csv("titanic.csv")
+```
+
+We need to clean up the data to prepare for data analysis.  
+
+Let's first explore the target variables (survived).  
+
+```{r}
+with(td, table(survived, useNA = "ifany"))
+```
+
+There is no missing value in the dependent variable.  
+
+Then, {tidymodels} require that the dependent variable is stored as a factor variable (categorical variable) when we do classification. Therefore, we should change the data type.  
+
+```{r}
+td <- td |> 
+  mutate(survived_fac = factor(survived))
+
+with(td, table(survived, survived_fac, useNA = "ifany"))
+```
+
+Let’s check if there’s any missing value in data test.
+```{r}
+colSums(is.na(td))
+```
+
+
+Drop observations with missing values.  
+
+```{r}
+td.nna <- td |> 
+        dplyr::select(survived_fac, pclass, age, child, old, sex, sibsp, parch, alone, fare, cherbourg, queenstown, southampton) |> 
+        na.omit()
+
+colSums(is.na(td.nna))
+```
+
+Then, we want to use logit regression models to predict Titanic passenger survival.
+
+
+# Logit Models
+
+Run the logit models to view the results
+
+```{r}
+td.nna <- td.nna |> 
+  mutate(pclass = factor(pclass))
+
+mod1 <- glm(survived_fac ~., family = binomial(link = 'logit'), data = td.nna)
+
+stargazer(mod1, type = "text",
+          dep.var.labels=c("Likelihood of survival"),
+          covariate.labels=c("pclass2",
+                             "pclass3",
+                             "Age",
+                             "Child", 
+                             "Old",
+                             "Woman",
+                             "Number of siblings or spouses",
+                             "Number of parents or children",
+                             "Alone",
+                             "Fare",
+                             "Departure from Cherbourg",
+                             "Departure from Queenstown",
+                             "Departure from Southampton"))
+```
+
+
+From the result, we can see that pclass, age, child, woman, Alone, cherbourg, sibspp, and queenstown are  significant features for predicting survival outcome. For instance, one-unit increase in age will decrease the log odd of survival by 0.023.     
+
+# Models: logit regression
+
+Then, we try to figure out the best model. 
+
+```{r}
+td.nna <- td.nna |> 
+  mutate(pclass = factor(pclass))
+
+fit1 <- logistic_reg() |> 
+  fit(survived_fac ~ pclass + age + child + old + 
+        sex + sibsp + parch + alone + fare + 
+        cherbourg + queenstown + southampton, 
+      data = td.nna)
+
+fit2 <- logistic_reg() |> 
+  fit(survived_fac ~ pclass + child + sex + sibsp, 
+      data = td.nna) 
+
+fit3 <- logistic_reg() |> 
+  fit(survived_fac ~ pclass + child + sex + sibsp +  
+                  age + cherbourg + alone, 
+      data = td.nna) 
+
+fit4 <- logistic_reg() |> 
+  fit(survived_fac ~ pclass + child + sex + sibsp +  
+                  age + cherbourg + alone+ 
+               queenstown, 
+      data = td.nna) 
+
+fit5 <- logistic_reg() |> 
+  fit(survived_fac ~ pclass + child + sex + sibsp +  
+                  age  + cherbourg + alone + 
+                  queenstown + parch, 
+      data = td.nna) 
+
+
+modelsummary(list(fit1, fit2, fit3, fit4, fit5),
+             coef_rename = c(
+               "(Intercept)" = "Intercept", 
+               "pclass" = "",
+               "age" = "Age",
+               "childChild" = "Child", 
+               "old" = "Old",
+               "sexWoman" = "Woman",
+               "sibsp" = "Number of siblings or spouses",
+               "parch" = "Number of parents or children",
+               "alone" = "Alone",
+               "fare" = "Fare",
+               "cherbourg" = "Departure from Cherbourg",
+               "queenstown" = "Departure from Queenstown",
+               "southampton" = "Departure from Southampton"))
+
+```
+
+# Cross validation
+
+We use 5-fold cross validation (outof-sample prediction) to decide the best model.  
+
+```{r}
+set.seed(12345)
+cv_fold <- vfold_cv(td.nna, v = 5)
+```
+
+```{r}
+fit.1_cv <- logistic_reg() |> 
+  fit_resamples(survived_fac ~ pclass + age + child + old + 
+        sex + sibsp + parch + alone + fare + 
+        cherbourg + queenstown + southampton, 
+                resamples = cv_fold)
+
+collect_metrics(fit.1_cv)
+```
+
+```{r}
+fit.2_cv <- logistic_reg() |> 
+  fit_resamples(survived_fac ~ pclass + child + sex + sibsp, 
+                resamples = cv_fold)
+
+collect_metrics(fit.2_cv)
+```
+
+
+```{r}
+fit.3_cv <- logistic_reg() |> 
+  fit_resamples(survived_fac ~ pclass + child + sex + sibsp +  
+                  age + cherbourg + alone, 
+                resamples = cv_fold)
+
+collect_metrics(fit.3_cv)
+```
+
+
+```{r}
+fit.4_cv <- logistic_reg() |> 
+  fit_resamples(survived_fac ~ pclass + child + sex + sibsp +  
+                  age + cherbourg + alone +
+                  queenstown, 
+                resamples = cv_fold)
+
+collect_metrics(fit.4_cv)
+```
+
+```{r}
+fit.5_cv <- logistic_reg() |> 
+  fit_resamples(survived_fac ~ pclass + child + sex + sibsp +  
+                  age  + cherbourg + alone + 
+                  queenstown + parch, 
+                resamples = cv_fold)
+
+collect_metrics(fit.5_cv)
+```
+
+The mean of roc_auc of fit 5 is the largest here. Thus, it is the best model to choose.  
+
+
+# Evaluating performances
+
+Calculate predicted probabilities.  
+
+```{r}
+pred_logit_1 <- predict(fit1, td.nna, type = "prob")
+pred_df_logit_1 <- data.frame(survived_fac = td.nna $ survived_fac, pred_logit_1) 
+
+pred_logit_2 <- predict(fit2, td.nna, type = "prob")
+pred_df_logit_2 <- data.frame(survived_fac = td.nna $ survived_fac, pred_logit_2) 
+
+pred_logit_3 <- predict(fit3, td.nna, type = "prob")
+pred_df_logit_3 <- data.frame(survived_fac = td.nna $ survived_fac, pred_logit_3) 
+
+pred_logit_4 <- predict(fit4, td.nna, type = "prob")
+pred_df_logit_4 <- data.frame(survived_fac = td.nna $ survived_fac, pred_logit_4) 
+
+pred_logit_5 <- predict(fit5, td.nna, type = "prob")
+pred_df_logit_5 <- data.frame(survived_fac = td.nna $ survived_fac, pred_logit_5) 
+```
+
+
+Create a ROC figure that compares the five models
+
+```{r}
+roc_logit_1 <- roc(pred_df_logit_1 $ survived_fac ~ 
+                   pred_df_logit_1 $.pred_1 + 
+                   pred_df_logit_2 $.pred_1, ci = TRUE)
+
+roc_logit_2 <- roc(pred_df_logit_1 $ survived_fac ~ 
+                   pred_df_logit_1 $.pred_1 + 
+                   pred_df_logit_3 $.pred_1, ci = TRUE)
+
+roc_logit_3 <- roc(pred_df_logit_1 $ survived_fac ~ 
+                   pred_df_logit_1 $.pred_1 + 
+                   pred_df_logit_4 $.pred_1, ci = TRUE)
+
+roc_logit_4 <- roc(pred_df_logit_1 $ survived_fac ~ 
+                   pred_df_logit_1 $.pred_1 + 
+                   pred_df_logit_5 $.pred_1, ci = TRUE)
+```
+
+ROC curves together:  
+
+```{r, tidy=F}
+ggroc(roc_logit_1, 
+      legacy.axes = TRUE, aes = c("linetype")) + 
+        geom_abline(color = "dark grey", size = 0.5) + 
+        labs(x = "False positive rate", 
+             y = "True positive rate",
+             linetype="Models") + 
+        scale_linetype_discrete(labels=c("Model1", "Model2")) + 
+  theme_bw() + 
+        theme(legend.position=c(0.8,0.2))
+
+ggroc(roc_logit_2, 
+      legacy.axes = TRUE, aes = c("linetype")) + 
+        geom_abline(color = "dark grey", size = 0.5) + 
+        labs(x = "False positive rate", 
+             y = "True positive rate",
+             linetype="Models") + 
+        scale_linetype_discrete(labels=c("Model1", "Model3")) + 
+  theme_bw() + 
+        theme(legend.position=c(0.8,0.2))
+
+ggroc(roc_logit_3, 
+      legacy.axes = TRUE, aes = c("linetype")) + 
+        geom_abline(color = "dark grey", size = 0.5) + 
+        labs(x = "False positive rate", 
+             y = "True positive rate",
+             linetype="Models") + 
+        scale_linetype_discrete(labels=c("Model1","Model4")) + 
+  theme_bw() + 
+        theme(legend.position=c(0.8,0.2))
+
+
+ggroc(roc_logit_4, 
+      legacy.axes = TRUE, aes = c("linetype")) + 
+        geom_abline(color = "dark grey", size = 0.5) + 
+        labs(x = "False positive rate", 
+             y = "True positive rate",
+             linetype="Models") + 
+        scale_linetype_discrete(labels=c("Model1","Model5")) + 
+  theme_bw() + 
+        theme(legend.position=c(0.8,0.2))
+```
+
+Test if the AUCs are different:  
+
+```{r}
+roc.test(roc1 = roc_logit_1[[1]], 
+         roc2 = roc_logit_1[[2]], method = "delong")
+
+roc.test(roc1 = roc_logit_2[[1]], 
+         roc2 = roc_logit_2[[2]], method = "delong")
+
+roc.test(roc1 = roc_logit_3[[1]], 
+         roc2 = roc_logit_3[[2]], method = "delong")
+
+roc.test(roc1 = roc_logit_4[[1]], 
+         roc2 = roc_logit_4[[2]], method = "delong")
+```
+
+We can see from above that AUCROC of Model 5 is the largest. Thus, it is the best model to choose. 
+
+
+
+
